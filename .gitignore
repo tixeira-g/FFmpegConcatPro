@@ -1,0 +1,7 @@
+bin/
+build/
+dist/
+build_env/
+*.spec
+.DS_Store
+._*

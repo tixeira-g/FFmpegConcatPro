@@ -1,0 +1,112 @@
+name: Build FFmpeg Concat Pro
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch: {}
+
+jobs:
+  build-mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Python 3.12 + Tk
+        run: |
+          brew install python@3.12 python-tk@3.12
+
+      - name: Criar venv e instalar PyInstaller
+        run: |
+          /opt/homebrew/bin/python3.12 -m venv build_env/venv
+          build_env/venv/bin/pip install --upgrade pip
+          build_env/venv/bin/pip install pyinstaller
+
+      - name: Baixar ffmpeg/ffprobe estaticos (arm64)
+        run: |
+          mkdir -p bin
+          for i in 1 2 3; do
+            curl -L --fail --retry 3 --max-time 300 -o /tmp/ffmpeg.zip "https://www.osxexperts.net/ffmpeg902arm.zip" && break
+            sleep 5
+          done
+          for i in 1 2 3; do
+            curl -L --fail --retry 3 --max-time 300 -o /tmp/ffprobe.zip "https://www.osxexperts.net/ffprobe902arm.zip" && break
+            sleep 5
+          done
+          unzip -o /tmp/ffmpeg.zip -d /tmp/x_ffmpeg
+          unzip -o /tmp/ffprobe.zip -d /tmp/x_ffprobe
+          cp /tmp/x_ffmpeg/ffmpeg bin/ffmpeg
+          cp /tmp/x_ffprobe/ffprobe bin/ffprobe
+          chmod +x bin/ffmpeg bin/ffprobe
+          codesign --force --sign - bin/ffmpeg
+          codesign --force --sign - bin/ffprobe
+          ./bin/ffmpeg -version
+          ./bin/ffprobe -version
+
+      - name: Build com PyInstaller
+        run: ./build_mac.sh
+
+      - name: Empacotar em .dmg
+        run: |
+          mkdir -p dmg_staging
+          cp -R dist/FFmpegConcatPro.app dmg_staging/
+          ln -s /Applications dmg_staging/Applications
+          hdiutil create -volname "FFmpeg Concat Pro" -srcfolder dmg_staging -ov -format UDZO FFmpegConcatPro-mac-arm64.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FFmpegConcatPro-mac-arm64
+          path: FFmpegConcatPro-mac-arm64.dmg
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar PyInstaller
+        run: pip install pyinstaller
+
+      - name: Baixar ffmpeg/ffprobe estaticos (win64, BtbN)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile ffmpeg.zip
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_extracted -Force
+          $sub = Get-ChildItem ffmpeg_extracted | Select-Object -First 1
+          Copy-Item "$($sub.FullName)\bin\ffmpeg.exe" bin\ffmpeg.exe
+          Copy-Item "$($sub.FullName)\bin\ffprobe.exe" bin\ffprobe.exe
+          .\bin\ffmpeg.exe -version
+          .\bin\ffprobe.exe -version
+
+      - name: Build com PyInstaller
+        run: |
+          pyinstaller --name FFmpegConcatPro --windowed --onedir --noconfirm --clean --add-binary "bin/ffmpeg.exe;." --add-binary "bin/ffprobe.exe;." ffmpeg_concat_pro.py
+
+      - name: Compilar instalador (Inno Setup)
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FFmpegConcatPro-windows-setup
+          path: installer_output/FFmpegConcatPro-Setup.exe
+
+  release:
+    needs: [build-mac, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Criar release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/FFmpegConcatPro-mac-arm64/FFmpegConcatPro-mac-arm64.dmg
+            artifacts/FFmpegConcatPro-windows-setup/FFmpegConcatPro-Setup.exe
